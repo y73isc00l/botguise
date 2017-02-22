@@ -1,0 +1,169 @@
+from flask import Flask,jsonify,request
+from nltk  import *
+import pickle
+from firebase import firebase
+import random
+import nltk
+from nltk import word_tokenize
+import hashlib
+from textblob.classifiers import NaiveBayesClassifier
+from textblob import TextBlob
+app = Flask(__name__)
+f=firebase.FirebaseApplication('https://botguise.firebaseio.com')
+def npcollocation(doc):
+    blob=TextBlob(doc)
+    tokens=word_tokenize(doc)
+    np=blob.noun_phrases
+    np_tokenize=[]
+    for phrase in np:
+        np_tokenize.append((phrase,word_tokenize(phrase)))
+    for phrase,nptokens in np_tokenize:
+        sz=len(nptokens)
+        for i in range(len(tokens)-sz+1):
+            if nptokens==tokens[i:i+sz]:
+                tokens[i:i+sz]=[phrase]
+                break
+    ##converting all tokens ex
+    tagged_tokens=nltk.pos_tag(tokens)
+    final_tokens=[]
+    noun_types=['NN','NNP','NNS']
+    for token,pos in tagged_tokens:
+        if pos=='.':
+            continue
+        if not pos in noun_types:
+            final_tokens.append(token.lower())
+        else:
+            final_tokens.append(token)
+    return final_tokens
+def fe3000(document):
+    feats={}
+    
+    tokens=npcollocation(document)
+    for pw in tokens:
+        feats["has_phrase({})".format(pw)]=True
+    return feats
+def hashfun(num):
+    m=hashlib.md5()
+    m.update(str(random.random()))
+    m.update(str(num))
+    return m.hexdigest()
+def extOutPerformAlgo(prob_dist,ref,threshhold):
+    toppers=[]
+    n=len(ref.keys())
+    for key in ref.keys():
+        if prob_dist.prob(key)>threshhold:
+            toppers.append(prob_dist.prob(key))
+        toppers.sort()
+    if len(toppers)==1:
+        return True
+    if len(toppers)>1 and toppers[0]>2/len(toppers):
+        return True
+    
+    if len(toppers)>2:
+        z=0
+        for tp in toppers:
+            z+=tp
+        S=0
+        for i in range(len(toppers)-1):
+            cmp=1.0*(toppers[i]/toppers[i+1]-1)
+            if cmp>1.20:
+                c=0
+            else:
+                c=1
+            S+=((-1)**(i+c))*cmp*1.0
+        if S>0:
+            return True
+        else:
+            return False
+    else:
+        return False
+class ProBayesClassifier(NaiveBayesClassifier):
+    def __init__(self):
+        NaiveBayesClassifier.__init__(self,[],feature_extractor=fe3000)
+        self.ref={}
+        self.threshhold=0.06
+    def update_store(self,doc_train):
+        key=hashfun(random.random())
+        self.update([(doc_train,key)])
+        self.ref.setdefault(key,[]).append(doc_train)
+    def update_store_key(self,doc_train,key):
+        self.update([(doc_train,key)])
+        self.ref.setdefault(key,[]).append(doc_train)
+    def postKey(self,doc_train,key):
+        self.update([(doc_train,key)])
+    def postNewKey(self,doc_train):
+        key=hashfun(random.random())
+        self.update([(doc_train,key)])
+        return key
+    def outPerformAlgo(self,doc_test):
+        prob_dist=self.prob_classify(doc_test)
+        return extOutPerformAlgo(prob_dist,self.ref,self.threshhold)
+fp=open('classifier.pkl','rb')
+clf=pickle.load(fp)
+fp.close()
+
+@app.route('/')
+def index():
+    return "<h1>This flask app is running!</h1>"
+@app.route('/jsonmes')
+def test():
+    return jsonify({'message':word_tokenize("Hi how are you doing")})
+@app.route('/PBC',methods=['POST'])
+def reply():
+  uid=request.json['user']
+  string=request.json['message']
+  part=request.json['part']
+  try:
+    #obtaining user pack classifier
+    ufp=open(uid+part+'.pkl','rb')
+    uclf=pickle.load(ufp)
+    ufp.close()
+  except:
+    #initialising user pack classifier
+    uclf=ProBayesClassifier()
+    strlst=['Ask me something','I dont know','Marvel heroes have swag','DC has no heroes,only legends']
+    keytup=[]
+    for sent in strlst:
+      key=uclf.postNewKey(sent)
+      keytup.append((key,sent))
+    for tup in keytup:
+      f.post('/users/'+uid+'/brain/'+part+'/'+tup[0]+'/curr',{'sentence':tup[1]})
+  #classifying blob
+  key=uclf.classify(string)
+  reliability=uclf.outPerformAlgo(string)
+  if reliability:
+    uclf.postKey(string,key)
+    newKey=key
+  if not reliability:
+    newKey=uclf.postNewKey(string)
+  #updating brain in firebase
+  f.post('/users/'+uid+'/brain/'+part+'/'+newKey+'/curr',{'sentence':string})
+  #updating the classifier
+  ufp=open(uid+part+'.pkl','wb')
+  pickle.dump(uclf,ufp,-1)
+  ufp.close()
+  #reply by next linking
+  nextdic=f.get('/users/'+uid+'/brain/'+part+'/'+key+'/next',None)
+  if not nextdic:
+    return jsonify({'reply':'Ya may be talk later','reliability':False})
+  nextdic=list(nextdic)
+  X=[]
+  for item in nextdic:
+    X.append(item[1])
+  options=len(X)
+  opt=random.randint(0,options-1)
+  nextKey=X[opt]['key']
+  replys=f.get('/users/'+uid+'/brain/'+part+'/'+nextKey+'/curr',None)
+  if not replys:
+    return jsonify({'reply':'Nothing to say','reliability':reliability})
+  replys=list(replys)
+  foo=random.choice(replys)
+  reply=foo[1]['sentence']
+  return jsonify({'reply':reply,'reliability':reliability})
+#   key=clf.classify(string)
+#   rep=clf.ref[key]
+#   foo=clf.outPerformAlgo(string)
+  
+
+if __name__ == '__main__':
+    app.run(port=8000)
