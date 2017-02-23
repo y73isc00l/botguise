@@ -53,11 +53,11 @@ def extOutPerformAlgo(prob_dist,ref,threshhold):
     for key in ref.keys():
         if prob_dist.prob(key)>threshhold:
             toppers.append(prob_dist.prob(key))
-        toppers.sort()
-    if len(toppers)==1:
-        return True
-    if len(toppers)>1 and toppers[0]>2/len(toppers):
-        return True
+    toppers.sort(reverse=True)
+#     if len(toppers)==1 and toppers[0]>0.5:
+#         return True
+#     if len(toppers)>1 and toppers[0]>0.3:
+#         return True
     
     if len(toppers)>2:
         z=0
@@ -77,23 +77,25 @@ def extOutPerformAlgo(prob_dist,ref,threshhold):
             return False
     else:
         return False
+    return False
 class ProBayesClassifier(NaiveBayesClassifier):
     def __init__(self):
         NaiveBayesClassifier.__init__(self,[],feature_extractor=fe3000)
         self.ref={}
         self.threshhold=0.06
-    def update_store(self,doc_train):
-        key=hashfun(random.random())
-        self.update([(doc_train,key)])
-        self.ref.setdefault(key,[]).append(doc_train)
-    def update_store_key(self,doc_train,key):
-        self.update([(doc_train,key)])
-        self.ref.setdefault(key,[]).append(doc_train)
+#     def update_store(self,doc_train):
+#         key=hashfun(random.random())
+#         self.update([(doc_train,key)])
+#         self.ref.setdefault(key,[]).append(doc_train)
+#     def update_store_key(self,doc_train,key):
+#         self.update([(doc_train,key)])
+#         self.ref.setdefault(key,[]).append(doc_train)
     def postKey(self,doc_train,key):
         self.update([(doc_train,key)])
     def postNewKey(self,doc_train):
         key=hashfun(random.random())
         self.update([(doc_train,key)])
+        self.ref.setdefault(key,[])
         return key
     def outPerformAlgo(self,doc_test):
         prob_dist=self.prob_classify(doc_test)
@@ -121,7 +123,7 @@ def reply():
   except:
     #initialising user pack classifier
     uclf=ProBayesClassifier()
-    strlst=['Ask me something','I dont know','Marvel heroes have swag','DC has no heroes,only legends']
+    strlst=['Ask me something','I dont know','Marvel rocks ','DC rules']
     keytup=[]
     for sent in strlst:
       key=uclf.postNewKey(sent)
@@ -145,25 +147,48 @@ def reply():
   #reply by next linking
   nextdic=f.get('/users/'+uid+'/brain/'+part+'/'+key+'/next',None)
   if not nextdic:
-    return jsonify({'reply':'Ya may be talk later','reliability':False})
-  nextdic=list(nextdic)
+    return jsonify({'reply':'Ya may be talk later'+key,'reliability':False})
+  nextdic=nextdic.items()
   X=[]
   for item in nextdic:
     X.append(item[1])
-  options=len(X)
-  opt=random.randint(0,options-1)
-  nextKey=X[opt]['key']
+  optkey=random.choice(X)
+  nextKey=optkey['key']
   replys=f.get('/users/'+uid+'/brain/'+part+'/'+nextKey+'/curr',None)
   if not replys:
     return jsonify({'reply':'Nothing to say','reliability':reliability})
-  replys=list(replys)
+  replys=replys.items()
   foo=random.choice(replys)
   reply=foo[1]['sentence']
   return jsonify({'reply':reply,'reliability':reliability})
 #   key=clf.classify(string)
 #   rep=clf.ref[key]
 #   foo=clf.outPerformAlgo(string)
-  
-
+@app.route('/train',methods=['POST'])
+def train():
+  uid=request.json['user']
+  prevblob=request.json['prevblob']
+  trainblob=request.json['trainblob']
+  part=request.json['part']
+  ufp=open(uid+part+'.pkl','rb')
+  uclf=pickle.load(ufp)
+  ufp.close()
+  key=uclf.classify(trainblob)
+  reliability=uclf.outPerformAlgo(trainblob)
+  if reliability:
+    uclf.postKey(trainblob,key)
+    newKey=key
+  if not reliability:
+    newKey=uclf.postNewKey(trainblob)
+  #updating brain in firebase
+  f.post('/users/'+uid+'/brain/'+part+'/'+newKey+'/curr',{'sentence':trainblob})
+  #updating the classifier
+  ufp=open(uid+part+'.pkl','wb')
+  pickle.dump(uclf,ufp,-1)
+  ufp.close()
+  #linking prev group keydash with newKey 
+  keydash=uclf.classify(prevblob)
+  f.post('/users/'+uid+'/brain/'+part+'/'+keydash+'/next',{'key':newKey,'rating':800})
+  return jsonify({'train':True})
 if __name__ == '__main__':
     app.run(port=8000)
