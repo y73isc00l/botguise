@@ -58,7 +58,8 @@ def extOutPerformAlgo(prob_dist,ref,threshhold):
 #         return True
 #     if len(toppers)>1 and toppers[0]>0.3:
 #         return True
-    
+    if n<15:
+	return False    
     if len(toppers)>2:
         z=0
         for tp in toppers:
