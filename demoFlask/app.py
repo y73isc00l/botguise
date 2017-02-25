@@ -1,10 +1,9 @@
 from flask import Flask,jsonify,request
-from nltk  import *
 import pickle
 from firebase import firebase
 import random
 import nltk
-from nltk import word_tokenize
+from nltk import word_tokenize,pos_tag
 import hashlib
 from textblob.classifiers import NaiveBayesClassifier
 from textblob import TextBlob
@@ -39,8 +38,9 @@ def fe3000(document):
     feats={}
     
     tokens=npcollocation(document)
-    for pw in tokens:
-        feats["has_phrase({})".format(pw)]=True
+    tagged_tokens=pos_tag(tokens)
+    for pw in tagged_tokens:
+        feats["has_token({},{})".format(pw[0],pw[1])]=True
     return feats
 def hashfun(num):
     m=hashlib.md5()
@@ -124,14 +124,19 @@ def reply():
   except:
     #initialising user pack classifier
     uclf=ProBayesClassifier()
-    strlst=['Ask me something','I dont know','Marvel rocks ','DC rules']
-    keytup=[]
-    for sent in strlst:
-      key=uclf.postNewKey(sent)
-      keytup.append((key,sent))
-    for tup in keytup:
-      f.post('/users/'+uid+'/brain/'+part+'/'+tup[0]+'/curr',{'sentence':tup[1]})
-  #classifying blob
+    str01='Ask me something'
+    str02='I dont know'
+    key01=uclf.postNewKey(str01)
+    key02=uclf.postNewKey(str02)
+    f.post('/users/'+uid+'/brain/'+part+'/'+key01+'/curr',{'sentence':str01})
+    f.post('/users/'+uid+'/brain/'+part+'/'+key01+'/next',{'key':key02,'rating':800})
+    f.post('/users/'+uid+'/brain/'+part+'/'+key02+'/curr',{'sentence':str02})
+    f.post('/users/'+uid+'/brain/'+part+'/'+key02+'/next',{'key':key01,'rating':800})
+  #connecting non-question to question
+  if string=='98a633a4227ede00887ce0e76fbc98d8':
+		questions=['Which house was harry in?','Which is ur favourite part?','Do you like Hermione?']
+		return jsonify({'reply':random.choice(questions),'reliability':True})  
+	#classifying blob
   key=uclf.classify(string)
   reliability=uclf.outPerformAlgo(string)
   if reliability:
@@ -148,7 +153,9 @@ def reply():
   #reply by next linking
   nextdic=f.get('/users/'+uid+'/brain/'+part+'/'+key+'/next',None)
   if not nextdic:
-    return jsonify({'reply':'Ya may be talk later'+key,'reliability':False})
+		questions=['Which house was harry in?','Which is ur favourite part?','Do you like Hermione?']
+		return jsonify({'reply':random.choice(questions),'reliability':True})  
+
   nextdic=nextdic.items()
   X=[]
   for item in nextdic:
